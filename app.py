@@ -80,6 +80,12 @@ def handle_query(user_query: str, wardrobe_choice: str) -> tuple[str, str, str]:
     return listing_text, session["outfit_suggestion"], session["fit_card"]
 
 
+def _clear_outputs() -> tuple[str, str, str]:
+    """Blank the three panels when a new query is submitted, so stale results
+    don't linger while the LLM tools run."""
+    return "", "", ""
+
+
 # ── interface ─────────────────────────────────────────────────────────────────
 
 EXAMPLE_QUERIES = [
@@ -89,6 +95,13 @@ EXAMPLE_QUERIES = [
     "black combat boots size 8",
     "designer ballgown size XXS under $5",   # deliberate no-results test
 ]
+
+# Give the fit-card panel top padding so its floating copy button doesn't
+# overlap the first line of caption text.
+_CSS = """
+.fit-card { padding-top: 1.6rem; }
+"""
+
 
 def build_interface():
     with gr.Blocks(title="FitFindr") as demo:
@@ -114,22 +127,25 @@ Describe what you're looking for — include size and price if you want to filte
 
         submit_btn = gr.Button("Find it", variant="primary")
 
-        with gr.Row():
-            listing_output = gr.Textbox(
-                label="🛍️ Top listing found",
-                lines=8,
-                interactive=False,
-            )
-            outfit_output = gr.Textbox(
-                label="👗 Outfit idea",
-                lines=8,
-                interactive=False,
-            )
-            fitcard_output = gr.Textbox(
-                label="✨ Your fit card",
-                lines=8,
-                interactive=False,
-            )
+        with gr.Row(equal_height=True):
+            # Listing is compact data; the outfit is long prose and gets the
+            # widest column. The fit card sits in between.
+            with gr.Column(scale=2):
+                gr.Markdown("### 🛍️ Top listing found")
+                # Plain fixed-width data — a textbox renders it cleanly.
+                listing_output = gr.Textbox(
+                    show_label=False,
+                    lines=10,
+                    interactive=False,
+                )
+            with gr.Column(scale=3):
+                gr.Markdown("### 👗 Outfit idea")
+                # LLM output contains markdown (bold headers) — render it.
+                outfit_output = gr.Markdown()
+            with gr.Column(scale=2):
+                gr.Markdown("### ✨ Your fit card")
+                # Markdown render + one-click copy for pasting into a post.
+                fitcard_output = gr.Markdown(buttons=["copy"], elem_classes=["fit-card"])
 
         gr.Examples(
             examples=[[q, "Example wardrobe"] for q in EXAMPLE_QUERIES],
@@ -137,15 +153,19 @@ Describe what you're looking for — include size and price if you want to filte
             label="Try these queries",
         )
 
-        submit_btn.click(
+        outputs = [listing_output, outfit_output, fitcard_output]
+
+        # Clear the panels first so old results don't linger while the LLM
+        # tools run, then fill them with the new query's results.
+        submit_btn.click(fn=_clear_outputs, outputs=outputs).then(
             fn=handle_query,
             inputs=[query_input, wardrobe_choice],
-            outputs=[listing_output, outfit_output, fitcard_output],
+            outputs=outputs,
         )
-        query_input.submit(
+        query_input.submit(fn=_clear_outputs, outputs=outputs).then(
             fn=handle_query,
             inputs=[query_input, wardrobe_choice],
-            outputs=[listing_output, outfit_output, fitcard_output],
+            outputs=outputs,
         )
 
     return demo
@@ -153,4 +173,5 @@ Describe what you're looking for — include size and price if you want to filte
 
 if __name__ == "__main__":
     demo = build_interface()
-    demo.launch()
+    # Gradio 6 takes theme and css on launch() rather than the Blocks constructor.
+    demo.launch(theme=gr.themes.Soft(), css=_CSS)
