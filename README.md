@@ -65,3 +65,13 @@ wardrobe = get_example_wardrobe()
 ## Planning
 
 [planning.md](planning.md) documents the design ahead of the code: what each tool takes and returns, how the planning loop decides what to call next, how state passes between tools, and how each failure mode is handled.
+
+## AI usage
+
+I built this with Claude (through Claude Code), feeding it the specs from planning.md one tool at a time. Here are three places where it helped and where I had to step in.
+
+For `search_listings`, I handed Claude the Tool 1 section of planning.md, the `tools.py` docstring, and a slice of the real `listings.json` so it could see the actual field names. It wrote the keyword-overlap filter that ranks listings and weights matches in the title and style tags higher. Reviewing what it produced, I caught a mistake in my own spec: I'd listed the result fields as `id, title, price, brand, size, condition`, but the real listings also carry `description`, `category`, `style_tags`, `colors`, and `platform`, and the styling tools need those. I corrected the field list in planning.md instead of the code.
+
+The query parser was the one I had to override the most. I gave Claude the Planning Loop and State Management sections and asked for a regex parser rather than an LLM call. Its first pass handled tidy queries fine but fell apart on real ones. It read "90s graphic tee" as a $90 budget, treated "Levi 501" as a $501 budget, and chopped "oversized hoodie" down to "over hoodie" because the size pattern matched the "size" sitting inside "oversized." I made it only count a number as a price when there's a real signal next to it, a keyword like "under" or a literal `$`, and added word boundaries to the size match. Then I ran it against seven query variations before trusting it. The Query parsing note in planning.md records the choice.
+
+The UI had a smaller version of the same story. When I asked Claude to render the outfit and fit-card panels as markdown and add a copy button, its first attempt used `gr.Markdown(show_copy_button=True)`, which crashed on the installed Gradio (6.17.3). I had it read the actual component signature; the working version uses `buttons=["copy"]` and passes `theme` and `css` to `launch()` rather than the `Blocks` constructor.
