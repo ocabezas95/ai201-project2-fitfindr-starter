@@ -59,6 +59,9 @@ listings = load_listings()
 wardrobe = get_example_wardrobe()
 ```
 
+## DEMO
+![alt text](images/Screenshot%202026-06-11%20at%209.22.47 PM.png)
+
 ## Planning
 
 [planning.md](planning.md) documents the design ahead of the code: what each tool takes and returns, how the planning loop decides what to call next, how state passes between tools, and how each failure mode is handled.
