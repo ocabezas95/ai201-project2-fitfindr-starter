@@ -18,7 +18,69 @@ Usage (once implemented):
     print(result["error"])   # None on success
 """
 
+import re
+
 from tools import search_listings, suggest_outfit, create_fit_card
+
+
+# Standard clothing sizes, longest first so "XXL" matches before "XL"/"L".
+_SIZE_TOKENS = ["XXS", "XS", "XXL", "XL", "S", "M", "L"]
+
+
+def _parse_query(query: str) -> dict:
+    """
+    Extract a description, size, and max_price from a natural language query
+    using regex / string matching (no LLM call needed for this step).
+
+    Returns a dict with keys: description (str), size (str | None),
+    max_price (float | None).
+    """
+    text = query.strip()
+    working = text  # we strip matched phrases out to leave a clean description
+
+    # max_price: only treat a number as a price when it carries a price signal —
+    # either a keyword ("under $30", "below 30", "max $40") or a "$" sign ("$30").
+    # This avoids misreading "90s" or "501" as a budget.
+    max_price = None
+    price_match = re.search(
+        r"(?:under|below|less than|max(?:imum)?|up to|cheaper than|<)\s*\$?\s*(\d+(?:\.\d+)?)",
+        text,
+        flags=re.IGNORECASE,
+    ) or re.search(r"\$\s*(\d+(?:\.\d+)?)", text)
+    if price_match:
+        max_price = float(price_match.group(1))
+        working = working.replace(price_match.group(0), " ")
+
+    # size: prefer an explicit "size M" / "size: L" / "size 32"; fall back to a
+    # standalone letter token. Accept known letter sizes or a numeric size.
+    size = None
+    explicit = re.search(r"\bsize\s*:?\s*([A-Za-z0-9]+)", text, flags=re.IGNORECASE)
+    if explicit:
+        candidate = explicit.group(1).upper()
+        if candidate in _SIZE_TOKENS or candidate.isdigit():
+            size = candidate
+        working = re.sub(
+            r"\bsize\s*:?\s*[A-Za-z0-9]+", " ", working, flags=re.IGNORECASE
+        )
+    else:
+        for token in _SIZE_TOKENS:
+            # standalone size token, surrounded by word boundaries
+            if re.search(rf"\b{token}\b", working):
+                size = token
+                working = re.sub(rf"\b{token}\b", " ", working, count=1)
+                break
+
+    # description: leftover text, with common filler phrases removed.
+    description = re.sub(
+        r"\b(looking for|i want|i need|find me|show me|a|an|some|the|for|in)\b",
+        " ",
+        working,
+        flags=re.IGNORECASE,
+    )
+    description = re.sub(r"[^\w\s'-]", " ", description)  # drop $, punctuation
+    description = re.sub(r"\s+", " ", description).strip()
+
+    return {"description": description, "size": size, "max_price": max_price}
 
 
 # ── session state ─────────────────────────────────────────────────────────────
@@ -92,9 +154,50 @@ def run_agent(query: str, wardrobe: dict) -> dict:
     Before writing code, complete the Planning Loop and State Management sections
     of planning.md — your implementation should match what you described there.
     """
-    # TODO: implement the planning loop
+    # Step 1: fresh session — the single source of truth for this interaction.
     session = _new_session(query, wardrobe)
-    session["error"] = "Planning loop not yet implemented."
+
+    # Step 2: parse the query into search parameters.
+    parsed = _parse_query(query)
+    session["parsed"] = parsed
+
+    # Step 3: search the listings.
+    results = search_listings(
+        description=parsed["description"],
+        size=parsed["size"],
+        max_price=parsed["max_price"],
+    )
+    session["search_results"] = results
+
+    # Empty-result short-circuit: do NOT proceed to the LLM tools.
+    if len(results) == 0:
+        constraints = []
+        if parsed["size"]:
+            constraints.append(f"size {parsed['size']}")
+        if parsed["max_price"] is not None:
+            constraints.append(f"under ${parsed['max_price']:g}")
+        extra = f" ({', '.join(constraints)})" if constraints else ""
+        session["error"] = (
+            f"No listings matched '{parsed['description']}'{extra}. "
+            "Try widening your budget, relaxing the size, or using different "
+            "keywords."
+        )
+        return session
+
+    # Step 4: select the top (most relevant) match.
+    session["selected_item"] = results[0]
+
+    # Step 5: suggest an outfit using the selected item and the wardrobe.
+    session["outfit_suggestion"] = suggest_outfit(
+        session["selected_item"], session["wardrobe"]
+    )
+
+    # Step 6: turn the outfit into a shareable fit card.
+    session["fit_card"] = create_fit_card(
+        session["outfit_suggestion"], session["selected_item"]
+    )
+
+    # Step 7: done — fit_card is populated, error is still None.
     return session
 
 
